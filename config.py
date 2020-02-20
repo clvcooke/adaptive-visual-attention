@@ -1,7 +1,7 @@
 import argparse
 
 arg_lists = []
-parser = argparse.ArgumentParser(description='RAM')
+parser = argparse.ArgumentParser(description='AVA')
 
 
 def str2bool(v):
@@ -48,10 +48,8 @@ reinforce_arg.add_argument('--M', type=float, default=10,
 data_arg = add_argument_group('Data Params')
 data_arg.add_argument('--valid_size', type=float, default=0.2,
                       help='Proportion of training set used for validation')
-data_arg.add_argument('--batch_size', type=int, default=2,
+data_arg.add_argument('--batch_size', type=int, default=8,
                       help='# of images in each batch of data')
-data_arg.add_argument('--num_workers', type=int, default=4,
-                      help='# of subprocesses to use for data loading')
 data_arg.add_argument('--shuffle', type=str2bool, default=True,
                       help='Whether to shuffle the train and valid indices')
 data_arg.add_argument('--show_sample', type=str2bool, default=False,
@@ -90,10 +88,6 @@ misc_arg.add_argument('--data_dir', type=str, default='./data',
                       help='Directory in which data is stored')
 misc_arg.add_argument('--ckpt_dir', type=str, default='./ckpt',
                       help='Directory in which to save model checkpoints')
-misc_arg.add_argument('--logs_dir', type=str, default='./logs/',
-                      help='Directory in which Tensorboard logs wil be stored')
-misc_arg.add_argument('--use_tensorboard', type=str2bool, default=False,
-                      help='Whether to use tensorboard for visualization')
 misc_arg.add_argument('--resume', type=str2bool, default=False,
                       help='Whether to resume training from checkpoint')
 misc_arg.add_argument('--print_freq', type=int, default=10,

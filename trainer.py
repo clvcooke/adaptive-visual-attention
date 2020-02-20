@@ -80,7 +80,6 @@ class Trainer(object):
         self.counter = 0
         self.lr_patience = config.lr_patience
         self.train_patience = config.train_patience
-        self.use_tensorboard = config.use_tensorboard
         self.resume = config.resume
         self.print_freq = config.print_freq
         self.plot_freq = config.plot_freq
@@ -107,7 +106,6 @@ class Trainer(object):
         self.optimizer = optim.Adam(
             self.model.parameters(), lr=self.lr
         )
-
 
     def train(self):
         """
@@ -328,7 +326,6 @@ class Trainer(object):
 
         return loss, sum(glimpse_totals) / batch_size, acc
 
-
     def validate(self, epoch):
         """
         Evaluate the model on the validation set.
@@ -343,7 +340,7 @@ class Trainer(object):
             if self.use_gpu:
                 x, y = x.cuda(), y.cuda()
             x, y = Variable(x), Variable(y)
-            loss, glm, acc = self.rollout(x,y)
+            loss, glm, acc = self.rollout(x, y)
             glimpses.update(glm)
 
             # store

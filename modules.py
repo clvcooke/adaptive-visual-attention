@@ -3,11 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-from torch.autograd import Variable
 
-import numpy as np
-
-class retina(object):
+class Retina(object):
     """
     A retina that extracts a foveated glimpse `phi`
     around location `l` from an image `x`. It encodes
@@ -22,9 +19,9 @@ class retina(object):
       of images.
     - l: a 2D Tensor of shape (B, 2). Contains normalized
       coordinates in the range [-1, 1].
-    - g: size of the first square patch.
-    - k: number of patches to extract in the glimpse.
-    - s: scaling factor that controls the size of
+    - patch_size: size of the first square patch.
+    - patch_amount: number of patches to extract in the glimpse.
+    - scale_factor: scaling factor that controls the size of
       successive patches.
 
     Returns
@@ -33,85 +30,39 @@ class retina(object):
       foveated glimpse of the image.
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, patch_size, patch_amount, scale_factor):
+        self.patch_size = patch_size
+        self.patch_amount = patch_amount
+        self.scale_factor = scale_factor
 
-    def illuminate(self, x, k):
+    def foveate(self, x, loc):
         """
-        Extract 1 k space sample
-
-        The `k` patches are finally resized to (g, g) and
-        concatenated into a tensor of shape (B, k, g, g, C).
-        """
-        phi = self.extract_k_stack(x, k)
-
-        # post processing as in normalize?
-        # phi = (phi - phi.mean()) / phi.std()
-        return phi
-
-    def foveate(self, x, l):
-        """
-        Extract `k` square patches of size `g`, centered
-        at location `l`. The initial patch is a square of
-        size `g`, and each subsequent patch is a square
-        whose side is `s` times the size of the previous
+        Extract `patch_amount` square patches of size `patch_size`, centered
+        at location `loc`. The initial patch is a square of
+        size `patch_size`, and each subsequent patch is a square
+        whose side is `scale_factor` times the size of the previous
         patch.
 
-        The `k` patches are finally resized to (g, g) and
-        concatenated into a tensor of shape (B, k, g, g, C).
+        The `patch_amount` patches are finally resized to (patch_size, patch_size) and
+        concatenated into a tensor of shape (B, patch_amount, patch_size, patch_size, C).
         """
-        phi = []
-        size = self.g
-
+        patches = []
+        size = self.patch_size
         # extract k patches of increasing size
-        for i in range(self.k):
-            phi.append(self.extract_patch(x, l, size))
-            size = int(self.s * size)
+        for i in range(self.patch_amount):
+            patches.append(self.extract_patch(x, loc, size))
+            size = int(self.scale_factor * size)
 
-        # resize the patches to squares of size g
-        for i in range(1, len(phi)):
-            k = phi[i].shape[-1] // self.g
-            phi[i] = F.avg_pool2d(phi[i], k)
+        # resize the patches to squares of size patch_size, first patch is skipped
+        for i in range(1, len(patches)):
+            k = patches[i].shape[-1] // self.patch_size
+            patches[i] = F.avg_pool2d(patches[i], k)
 
         # concatenate into a single tensor and flatten
-        phi = torch.cat(phi, 1)
+        phi = torch.cat(patches, 1)
         phi = phi.view(phi.shape[0], -1)
 
         return phi
-
-    @staticmethod
-    def sample_k_space(k_stack, led_configuration):
-        # TODO: there is probably a better/more efficient way to do this...
-        k_space_sample = torch.sum(k_stack * led_configuration.flatten(),
-                                   axis=-1)
-        return k_space_sample
-
-    def extract_k_stack(self, x, k):
-        """
-                Extract a single sample for each image in the
-                minibatch `x`.
-
-                Args
-                ----
-                - x: a 4D Tensor of shape (B, H, W, K). The minibatch
-                  of images.
-                - l: a 2D Tensor of shape (B, K).
-                - size: a scalar defining the size of the extracted patch.
-
-                Returns
-                -------
-                - patch: a 4D Tensor of shape (B, size, size, C)
-        """
-        B, K, H, W = x.shape
-
-        samples = []
-        for i in range(B):
-            im = x[i].unsqueeze(dim=0)
-            sample = self.sample_k_space(im, k[i])
-            samples.append(sample)
-        # concat into a single tensor
-        samples = torch.cat(samples)
-        return samples
 
     def extract_patch(self, x, l, size):
         """
@@ -180,7 +131,8 @@ class retina(object):
 
         return patch
 
-    def denormalize(self, T, coords):
+    @staticmethod
+    def denormalize(T, coords):
         """
         Convert coordinates in the range [-1, 1] to
         coordinates in the range [0, T] model_where `T` is
@@ -188,7 +140,8 @@ class retina(object):
         """
         return (0.5 * ((coords + 1.0) * T)).long()
 
-    def exceeds(self, from_x, to_x, from_y, to_y, T):
+    @staticmethod
+    def exceeds(from_x, to_x, from_y, to_y, T):
         """
         Check whether the extracted patch will exceed
         the boundaries of the image of size `T`.
@@ -200,7 +153,7 @@ class retina(object):
         return False
 
 
-class glimpse_network(nn.Module):
+class GlimpseNetwork(nn.Module):
     """
     A network that combines the "what" and the "model_where"
     into a glimpse feature vector `g_t`.
@@ -238,29 +191,12 @@ class glimpse_network(nn.Module):
       current timestep `t`.
     """
 
-    def __init__(self, h_g, h_l, learned_start, channels):
-        super(glimpse_network, self).__init__()
-        self.retina = retina()
+    def __init__(self, h_g, h_l, learned_start, patch_amount, patch_size):
+        super(GlimpseNetwork, self).__init__()
+        self.retina = Retina(patch_amount=patch_amount, patch_size=patch_size, scale_factor=scale_factor)
         self.learned_start = learned_start
-        if learned_start:
-            self.conv_layer = torch.nn.Conv2d(channels, 1, kernel_size=1,
-                                              stride=1, bias=True)
-        self.channels = channels
-        self.model_what = torch.nn.Sequential(
-            torch.nn.Linear(784, 128),
-            torch.nn.BatchNorm1d(128),
-            torch.nn.ReLU(),
-            torch.nn.Linear(128, 256),
-            torch.nn.BatchNorm1d(256)
-        )
-
-        self.model_where = torch.nn.Sequential(
-            torch.nn.Linear(self.channels, 128),
-            torch.nn.BatchNorm1d(128),
-            torch.nn.ReLU(),
-            torch.nn.Linear(128, 256),
-            torch.nn.BatchNorm1d(256)
-        )
+        self.model_what = WhatModel()
+        self.model_where = WhereModel()
 
     def forward(self, x, k_t_prev):
         # generate k-sample phi from image x
@@ -277,6 +213,38 @@ class glimpse_network(nn.Module):
         res_k = self.model_where(k_t_prev)
         res = F.relu(res_k + res_phi)
         return res
+
+
+class WhatModel(nn.Module):
+
+    def __init__(self):
+        super(WhatModel, self).__init__()
+        self.model= torch.nn.Sequential(
+            torch.nn.Linear(784, 128),
+            torch.nn.BatchNorm1d(128),
+            torch.nn.ReLU(),
+            torch.nn.Linear(128, 256),
+            torch.nn.BatchNorm1d(256)
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+
+class WhereModel(nn.Module):
+
+    def __init__(self):
+        super(WhereModel, self).__init__()
+        self.model = torch.nn.Sequential(
+            torch.nn.Linear(784, 128),
+            torch.nn.BatchNorm1d(128),
+            torch.nn.ReLU(),
+            torch.nn.Linear(128, 256),
+            torch.nn.BatchNorm1d(256)
+        )
+
+    def forward(self, x):
+        return self.model(x)
 
 
 class action_network(nn.Module):
@@ -353,6 +321,6 @@ class illumination_network(nn.Module):
     def forward(self, h_t, valid=False):
         # compute mean
         mu = self.model(h_t)
-        noise = torch.randn_like(mu)*self.std
+        noise = torch.randn_like(mu) * self.std
         k_t = torch.tanh(mu + noise)
         return k_t

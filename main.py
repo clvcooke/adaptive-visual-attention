@@ -5,10 +5,10 @@ from config import get_config
 from data_loader import get_test_loader, get_train_valid_loader
 from trainer import Trainer
 
-wandb.init("AVA")
 
-
-def main(config):
+def main():
+    wandb.init("AVA")
+    config, unparsed = get_config()
     # ensure reproducibility
     torch.manual_seed(config.random_seed)
     if config.use_gpu:
@@ -30,5 +30,4 @@ def main(config):
 
 
 if __name__ == '__main__':
-    config, unparsed = get_config()
-    main(config)
+    main()

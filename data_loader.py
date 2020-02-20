@@ -5,10 +5,10 @@ from torchvision import datasets, transforms
 
 
 def get_random_shift(scale=2, image_size=28):
-    pad_amnt = image_size * (scale - 1)
-    crop_size = image_size + pad_amnt
+    pad_amount = image_size * (scale - 1)
+    crop_size = image_size + pad_amount
     random_shift = transforms.Compose([
-        transforms.Pad(pad_amnt, fill=0),
+        transforms.Pad(pad_amount, fill=0),
         transforms.RandomCrop(crop_size),
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,)),

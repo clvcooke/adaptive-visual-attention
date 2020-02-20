@@ -1,5 +1,5 @@
 import torch.nn as nn
-from modules import glimpse_network, decision_network
+from modules import GlimpseNetwork, decision_network
 from modules import action_network, illumination_network
 from torch.nn import LSTMCell
 
@@ -19,7 +19,6 @@ class RecurrentAttention(nn.Module):
     - Minh et. al., https://arxiv.org/abs/1406.6247
     """
     def __init__(self,
-                 channels,
                  h_g,
                  h_l,
                  std,
@@ -48,10 +47,9 @@ class RecurrentAttention(nn.Module):
         super(RecurrentAttention, self).__init__()
         self.std = std
 
-        self.sensor = glimpse_network(h_g, h_l, learned_start, channels)
+        self.sensor = GlimpseNetwork(h_g, h_l, learned_start)
         self.rnn = LSTMCell(256, hidden_size)
         self.decision = decision_network(hidden_size, 2)
-        self.illuminator = illumination_network(hidden_size, channels, std)
         self.classifier = action_network(hidden_size, num_classes)
 
     def forward(self, x, k_t_prev, h_t_prev, last=False, valid=False):
