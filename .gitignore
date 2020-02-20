@@ -1,10 +1,9 @@
 *.p
 *.mp4
-data/processed/
-data/raw/
 logs/
 ckpt/
 .DS_Store
+data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
