@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Normal
 
 
 class Retina(object):
@@ -154,127 +154,47 @@ class Retina(object):
 
 
 class GlimpseNetwork(nn.Module):
-    """
-    A network that combines the "what" and the "model_where"
-    into a glimpse feature vector `g_t`.
 
-    - "what": glimpse extracted from the retina.
-    - "model_where": location tuple model_where glimpse was extracted.
-
-    Concretely, feeds the output of the retina `phi` to
-    a fc layer and the glimpse location vector `l_t_prev`
-    to a fc layer. Finally, these outputs are fed each
-    through a fc layer and their sum is rectified.
-
-    In other words:
-
-        `g_t = relu( fc( fc(l) ) + fc( fc(phi) ) )`
-
-    Args
-    ----
-    - h_g: hidden layer size of the fc layer for `phi`.
-    - h_l: hidden layer size of the fc layer for `l`.
-    - g: size of the square patches in the glimpses extracted
-      by the retina.
-    - k: number of patches to extract per glimpse.
-    - s: scaling factor that controls the size of successive patches.
-    - c: number of num_channels in each image.
-    - x: a 4D Tensor of shape (B, H, W, C). The minibatch
-      of images.
-    - l_t_prev: a 2D tensor of shape (B, 2). Contains the glimpse
-      coordinates [x, y] for the previous timestep `t-1`.
-
-    Returns
-    -------
-    - g_t: a 2D tensor of shape (B, hidden_size). The glimpse
-      representation returned by the glimpse network for the
-      current timestep `t`.
-    """
-
-    def __init__(self, h_g, h_l, learned_start, patch_amount, patch_size):
+    # noinspection PyTypeChecker
+    def __init__(self, h_g, h_l, learned_start, patch_amount, patch_size, scale_factor):
         super(GlimpseNetwork, self).__init__()
         self.retina = Retina(patch_amount=patch_amount, patch_size=patch_size, scale_factor=scale_factor)
+        # TODO: pass in h_g and h_l
         self.learned_start = learned_start
-        self.model_what = WhatModel()
-        self.model_where = WhereModel()
+        self.model_what = SimpleMLP(28 * 28, 128, hidden_size=128, hidden_layers=1, final_activation=None)
+        self.model_where = SimpleMLP(2, 128, hidden_size=128, hidden_layers=1, final_activation=None)
 
-    def forward(self, x, k_t_prev):
-        # generate k-sample phi from image x
-        if k_t_prev is None and self.learned_start:
-            phi = self.conv_layer(x.permute(0, 3, 1, 2))
-            k_t_prev = self.conv_layer.weight.view(-1, self.channels).repeat(
-                [phi.shape[0], 1])
-        else:
-            if k_t_prev is None:
-                k_t_prev = torch.rand([x.shape[0], self.channels]) * 2 - 1
-            phi = self.retina.illuminate(x, k_t_prev).view((-1, 1, 28, 28))
-
-        res_phi = self.model_what(phi.view((phi.shape[0], -1)))
-        res_k = self.model_where(k_t_prev)
+    def forward(self, x, loc_t):
+        phi = self.retina.foveate(x, loc_t)
+        res_phi = self.model_what(phi)
+        res_k = self.model_where(loc_t)
         res = F.relu(res_k + res_phi)
         return res
 
 
-class WhatModel(nn.Module):
+class SimpleMLP(nn.Module):
 
-    def __init__(self):
-        super(WhatModel, self).__init__()
-        self.model= torch.nn.Sequential(
-            torch.nn.Linear(784, 128),
-            torch.nn.BatchNorm1d(128),
-            torch.nn.ReLU(),
-            torch.nn.Linear(128, 256),
-            torch.nn.BatchNorm1d(256)
-        )
-
-    def forward(self, x):
-        return self.model(x)
-
-
-class WhereModel(nn.Module):
-
-    def __init__(self):
-        super(WhereModel, self).__init__()
-        self.model = torch.nn.Sequential(
-            torch.nn.Linear(784, 128),
-            torch.nn.BatchNorm1d(128),
-            torch.nn.ReLU(),
-            torch.nn.Linear(128, 256),
-            torch.nn.BatchNorm1d(256)
-        )
+    def __init__(self, input_size, output_size, hidden_size=64, hidden_layers=1, final_activation=nn.ReLU):
+        super(SimpleMLP, self).__init__()
+        layers = []
+        curr_size = input_size
+        for i in range(hidden_layers):
+            layers.append(nn.Linear(curr_size, hidden_size))
+            layers.append(nn.ReLU())
+            curr_size = hidden_size
+        layers.append(nn.Linear(curr_size, output_size))
+        if final_activation is not None:
+            layers.append(final_activation())
+        self.model = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.model(x)
 
 
-class action_network(nn.Module):
-    """
-    Uses the internal state `h_t` of the core network to
-    produce the final output classification.
-
-    Concretely, feeds the hidden state `h_t` through a fc
-    layer followed by a softmax to create a vector of
-    output probabilities over the possible num_classes.
-
-    Hence, the environment action `a_t` is drawn from a
-    distribution conditioned on an affine transformation
-    of the hidden state vector `h_t`, or in other words,
-    the action network is simply a linear softmax classifier.
-
-    Args
-    ----
-    - input_size: input size of the fc layer.
-    - output_size: output size of the fc layer.
-    - h_t: the hidden state vector of the core network for
-      the current time step `t`.
-
-    Returns
-    -------
-    - a_t: output probability vector over the num_classes.
-    """
+class ActionNetwork(nn.Module):
 
     def __init__(self, input_size, output_size):
-        super(action_network, self).__init__()
+        super(ActionNetwork, self).__init__()
         self.fc = nn.Linear(input_size, output_size)
 
     def forward(self, h_t):
@@ -282,45 +202,43 @@ class action_network(nn.Module):
         return a_t
 
 
-class decision_network(nn.Module):
+# noinspection PyTypeChecker
+class LocationNetwork(nn.Module):
+
+    def __init__(self, input_size, output_size, std, normalized=True):
+        super(LocationNetwork, self).__init__()
+        self.normalized = normalized
+        self.std = std
+        self.model = SimpleMLP(input_size, output_size, hidden_size=input_size, hidden_layers=1,
+                               final_activation=nn.Tanh)
+
+    def forward(self, x):
+        mu = self.model(x)
+        noise = torch.zeros_like(mu)
+        noise.data.normal_(std=self.std)
+        log_p = Normal(loc=0, scale=self.std).log_prob(noise)
+        loc = mu + noise
+        return loc, log_p
+
+
+# noinspection PyTypeChecker
+class DecisionNetwork(nn.Module):
     def __init__(self, input_size, output_size):
-        super(decision_network, self).__init__()
-        self.model = nn.Sequential(
-            nn.Linear(input_size, input_size),
-            nn.BatchNorm1d(input_size),
-            nn.ReLU(),
-            nn.Linear(input_size, output_size),
-            nn.Softmax(dim=1)
-        )
+        super(DecisionNetwork, self).__init__()
+        self.model = SimpleMLP(input_size, output_size, hidden_layers=1, hidden_size=input_size, final_activation=None)
+        self.softmax = nn.Softmax(dim=1)
 
     def forward(self, h_t):
-        probs = self.model(h_t)
-        try:
-            sample = torch.distributions.Categorical(probs=probs).sample()
-        except:
-            probs = torch.softmax(probs + 1, dim=1)
-            sample = torch.distributions.Categorical(probs=probs).sample()
-        probs = torch.log(probs)
-        return sample, probs
+        probs = self.softmax(self.model(h_t))
+        sample = torch.distributions.Categorical(probs=probs).sample()
+        log_probs = torch.log(probs)
+        return sample, log_probs
 
 
-class illumination_network(nn.Module):
+class BaselineNetwork(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(BaselineNetwork, self).__init__()
+        self.model = SimpleMLP(input_size, output_size, hidden_layers=1, hidden_size=input_size, final_activation=nn.ReLU)
 
-    def __init__(self, input_size, output_size, std):
-        super(illumination_network, self).__init__()
-        self.std = std
-        self.model = nn.Sequential(
-            nn.Linear(input_size, input_size),
-            nn.BatchNorm1d(input_size),
-            nn.ReLU(),
-            nn.Linear(input_size, output_size),
-            nn.Tanh()
-        )
-        self.std = std
-
-    def forward(self, h_t, valid=False):
-        # compute mean
-        mu = self.model(h_t)
-        noise = torch.randn_like(mu) * self.std
-        k_t = torch.tanh(mu + noise)
-        return k_t
+    def forward(self, x):
+        return self.model(x)

@@ -11,7 +11,7 @@ import pickle
 
 from tqdm import tqdm
 from utils import AverageMeter
-from model import RecurrentAttention
+from model import AdaptiveAttention
 
 import wandb
 
@@ -93,7 +93,7 @@ class Trainer(object):
             os.makedirs(self.plot_dir)
 
         # build RAM model
-        self.model = RecurrentAttention(
+        self.model = AdaptiveAttention(
             self.num_channels, self.loc_hidden, self.glimpse_hidden,
             self.std, self.hidden_size, self.num_classes, self.config.learned_start
         )
@@ -248,7 +248,6 @@ class Trainer(object):
         batch_size = x.shape[0]
         l_t = None
         h_t = None
-
         # extract the glimpses
         total_glimpses = 0
         # we want to run this loop UNTIL they are all done,
@@ -257,45 +256,52 @@ class Trainer(object):
         # done to do proper masking
 
         # use None so everything errors out if I don't explicitly set it
+        # these arrays contain the last valid value for each element of a mini-batch
         prob_as = [None for _ in range(batch_size)]
         log_ds = [None for _ in range(batch_size)]
         done_indices = [-1 for _ in range(batch_size)]
         timeouts = [False for _ in range(batch_size)]
         glimpse_totals = [None for _ in range(batch_size)]
-        for t in range(self.num_glimpses):
-            total_glimpses += 1
+        baselines = []
+        locations = []
+        locations_log_probs = []
+        glimpse_number = 0
+        while not all([done_index > -1 for done_index in done_indices]) and glimpse_number < self.num_glimpses:
             # forward pass through model
-            h_t, l_t, prob_a, d_t, log_probds = self.model(x, l_t, h_t)
+            h_t, loc_t, log_probs_loc, log_probs_a, d_t, log_probs_d, baseline = self.model(x, l_t, h_t)
+            baselines.append(baseline)
+            locations.append(loc_t)
+            locations_log_probs.append(log_probs_loc)
             for batch_ind in range(batch_size):
                 if done_indices[batch_ind] > -1:
                     # already done
                     continue
                 elif d_t[batch_ind] == 1:
-                    glimpse_totals[batch_ind] = t + 1
+                    glimpse_totals[batch_ind] = glimpse_number + 1
                     # mark as done
-                    done_indices[batch_ind] = t
+                    done_indices[batch_ind] = glimpse_number
                     # save the log_d
-                    log_ds[batch_ind] = log_probds[batch_ind]
+                    log_ds[batch_ind] = log_probs_d[batch_ind]
                     # save the prob_a
-                    prob_as[batch_ind] = prob_a[batch_ind]
-                elif t == self.num_glimpses - 1:
+                    prob_as[batch_ind] = log_probs_a[batch_ind]
+                elif glimpse_number == (self.num_glimpses - 1):
                     # glimpses are timing out
                     timeouts[batch_ind] = True
-                    glimpse_totals[batch_ind] = t + 1
+                    glimpse_totals[batch_ind] = glimpse_number + 1
                     # mark as done
-                    done_indices[batch_ind] = t
+                    done_indices[batch_ind] = glimpse_number
                     # save the log_d
-                    log_ds[batch_ind] = log_probds[batch_ind]
+                    log_ds[batch_ind] = log_probs_d[batch_ind]
                     # save the prob_a
-                    prob_as[batch_ind] = prob_a[batch_ind]
-            if all([done_index > -1 for done_index in done_indices]):
-                break
+                    prob_as[batch_ind] = log_probs_a[batch_ind]
+            glimpse_number += 1
+
         prob_as = torch.stack(prob_as)
         log_ds = torch.stack(log_ds)
         # calculate reward
         predicted = torch.max(prob_as, 1)[1]
-        R = (predicted.detach() == y.long()).float()
-        R = R.unsqueeze(1).repeat(1, self.num_glimpses)
+        reward = (predicted.detach() == y.long()).float()
+        reward = reward.unsqueeze(1).repeat(1, self.num_glimpses)
 
         # compute losses for differentiable modules
         loss_action = F.nll_loss(prob_as, y)
@@ -305,19 +311,21 @@ class Trainer(object):
             if timeouts[batch_ind]:
                 decision_target.append(1)
                 decision_scaling.append(1.0)
-            elif R[batch_ind][0] == 1:
+            elif reward[batch_ind][0] == 1:
                 decision_target.append(1)
                 decision_scaling.append(self.config.loss_balance)
-            elif R[batch_ind][0] == 0:
+            elif reward[batch_ind][0] == 0:
                 decision_target.append(0)
                 decision_scaling.append(1.0)
             else:
                 raise RuntimeError("how did we get here?")
         decision_target = torch.tensor(decision_target, device=log_ds.device)
         decision_scaling = torch.tensor(decision_scaling, device=log_ds.device)
-        # now take the error between our decision target and log_ds
+        # now take the error between our decider target and log_ds
         loss_decision = (F.nll_loss(log_ds, decision_target,
                                     reduction='none') * decision_scaling).mean()
+        # use REINFORCE to calculate loss based on reward
+
         # sum up into a hybrid loss
         loss = loss_action + loss_decision
         # compute accuracy
@@ -374,14 +382,14 @@ class Trainer(object):
             self.batch_size = x.shape[0]
             h_t, l_t = self.reset()
             h_t = None
-
+            # h_t, loc_t, log_probs_loc, log_probas, d, log_probs_d
             # extract the glimpses
             for t in range(self.num_glimpses - 1):
                 # forward pass through model
-                h_t, l_t, b_t, p = self.model(x, l_t, h_t, valid=True)
+                h_t, loc_t, log_probs_loc, log_probas, d, log_probs_d = self.model(x, l_t, h_t, valid=True)
 
             # last iteration
-            h_t, l_t, b_t, log_probas, p = self.model(
+            h_t, loc_t, log_probs_loc, log_probas, d, log_probs_d = self.model(
                 x, l_t, h_t, last=True, valid=True
             )
 
