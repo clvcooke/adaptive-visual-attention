@@ -156,13 +156,14 @@ class Retina(object):
 class GlimpseNetwork(nn.Module):
 
     # noinspection PyTypeChecker
-    def __init__(self, h_g, h_l, learned_start, patch_amount, patch_size, scale_factor):
+    def __init__(self, hidden_size, patch_amount, patch_size, scale_factor):
         super(GlimpseNetwork, self).__init__()
         self.retina = Retina(patch_amount=patch_amount, patch_size=patch_size, scale_factor=scale_factor)
+        self.patch_data_size = patch_size*patch_size*patch_amount
+        self.loc_size = 2
         # TODO: pass in h_g and h_l
-        self.learned_start = learned_start
-        self.model_what = SimpleMLP(28 * 28, 128, hidden_size=128, hidden_layers=1, final_activation=None)
-        self.model_where = SimpleMLP(2, 128, hidden_size=128, hidden_layers=1, final_activation=None)
+        self.model_what = SimpleMLP(self.patch_data_size, hidden_size, hidden_size=hidden_size, hidden_layers=1, final_activation=None)
+        self.model_where = SimpleMLP(self.loc_size, hidden_size, hidden_size=hidden_size, hidden_layers=1, final_activation=None)
 
     def forward(self, x, loc_t):
         phi = self.retina.foveate(x, loc_t)
@@ -217,6 +218,7 @@ class LocationNetwork(nn.Module):
         noise = torch.zeros_like(mu)
         noise.data.normal_(std=self.std)
         log_p = Normal(loc=0, scale=self.std).log_prob(noise)
+        log_p = torch.sum(log_p, dim=1)
         loc = mu + noise
         return loc, log_p
 

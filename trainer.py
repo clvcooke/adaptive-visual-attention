@@ -55,27 +55,25 @@ class Trainer(object):
         if config.is_train:
             self.train_loader = data_loader[0]
             self.valid_loader = data_loader[1]
-            self.num_channels = data_loader[2]
-            self.num_classes = data_loader[3]
+            self.num_classes = data_loader[2]
             self.num_train = len(self.train_loader.sampler.indices)
             self.num_valid = len(self.valid_loader.sampler.indices)
         else:
             self.test_loader = data_loader
             self.num_test = len(self.test_loader.dataset)
-            self.num_channels = data_loader[1]
-            self.num_classes = data_loader[2]
+            self.num_classes = data_loader[1]
         # training params
         self.epochs = config.epochs
         self.start_epoch = 0
         self.momentum = config.momentum
         self.lr = config.init_lr
         self.loss_balance = config.loss_balance
+        self.batch_size = config.batch_size
 
         # misc params
         self.use_gpu = config.use_gpu
         self.best = config.best
         self.ckpt_dir = config.ckpt_dir
-        self.logs_dir = config.logs_dir
         self.best_valid_acc = 0.
         self.counter = 0
         self.lr_patience = config.lr_patience
@@ -83,19 +81,16 @@ class Trainer(object):
         self.resume = config.resume
         self.print_freq = config.print_freq
         self.plot_freq = config.plot_freq
-        self.model_name = 'ram_{}_{}x{}_{}'.format(
+        self.model_name = 'ava_{}_{}x{}_{}'.format(
             config.num_glimpses, config.patch_size,
             config.patch_size, config.glimpse_scale
         )
 
-        self.plot_dir = './plots/' + self.model_name + '/'
-        if not os.path.exists(self.plot_dir):
-            os.makedirs(self.plot_dir)
-
         # build RAM model
         self.model = AdaptiveAttention(
-            self.num_channels, self.loc_hidden, self.glimpse_hidden,
-            self.std, self.hidden_size, self.num_classes, self.config.learned_start
+            h_g=self.hidden_size, h_l=self.hidden_size, hidden_size=self.hidden_size, std=self.std,
+            num_classes=self.num_classes, patch_amount=self.num_patches, patch_size=self.patch_size,
+            scale_factor=self.glimpse_scale
         )
         if self.use_gpu:
             self.model.cuda()
@@ -106,6 +101,8 @@ class Trainer(object):
         self.optimizer = optim.Adam(
             self.model.parameters(), lr=self.lr
         )
+
+        self.curr_epoch = None
 
     def train(self):
         """
@@ -159,13 +156,13 @@ class Trainer(object):
                 print("[!] No improvement in a while, stopping training.")
                 return
             self.best_valid_acc = max(valid_acc, self.best_valid_acc)
-            self.save_checkpoint(
-                {'epoch': epoch + 1,
-                 'model_state': self.model.state_dict(),
-                 'optim_state': self.optimizer.state_dict(),
-                 'best_valid_acc': self.best_valid_acc,
-                 }, is_best
-            )
+            # self.save_checkpoint(
+            #     {'epoch': epoch + 1,
+            #      'model_state': self.model.state_dict(),
+            #      'optim_state': self.optimizer.state_dict(),
+            #      'best_valid_acc': self.best_valid_acc,
+            #      }, is_best
+            # )
             # decay
             # for param_group in self.optimizer.param_groups:
             #     old_lr = param_group['lr']
@@ -190,20 +187,7 @@ class Trainer(object):
             for i, (x, y) in enumerate(self.train_loader):
                 if self.use_gpu:
                     x, y = x.cuda(), y.cuda()
-                x, y = Variable(x), Variable(y)
-
-                import numpy as np
-                for b in range(x.shape[0]):
-                    random_rotation = np.random.randint(0, 4)
-                    if random_rotation == 0:
-                        pass
-                    elif random_rotation == 1:
-                        x[b] = x[b].transpose(0, 1)
-                    elif random_rotation == 2:
-                        x[b] = x[b].flip(1)
-                    else:
-                        x[b] = x[b].transpose(0, 1).flip(1)
-
+                # x, y = Variable(x), Variable(y)
                 loss, glm, acc = self.rollout(x, y)
                 glimpses.update(glm)
                 # store
@@ -225,13 +209,6 @@ class Trainer(object):
                 # measure elapsed time
                 toc = time.time()
                 batch_time.update(toc - tic)
-
-                try:
-                    loss_data = loss.data[0]
-                    acc_data = acc.data[0]
-                except IndexError:
-                    loss_data = loss.data.item()
-                    acc_data = acc.data.item()
                 pbar.set_description(
                     (
                         "{:.1f}s - loss: {:.3f} - acc: {:.3f}, glm {:.3f}".format(
@@ -245,11 +222,7 @@ class Trainer(object):
             return losses.avg, accs.avg, glimpses.avg
 
     def rollout(self, x, y):
-        batch_size = x.shape[0]
-        l_t = None
-        h_t = None
-        # extract the glimpses
-        total_glimpses = 0
+        h_t, l_t = self.reset()
         # we want to run this loop UNTIL they are all done,
         # that will involve some "dummy" forward passes
         # need to track when each element of the batch is actually
@@ -257,11 +230,11 @@ class Trainer(object):
 
         # use None so everything errors out if I don't explicitly set it
         # these arrays contain the last valid value for each element of a mini-batch
-        prob_as = [None for _ in range(batch_size)]
-        log_ds = [None for _ in range(batch_size)]
-        done_indices = [-1 for _ in range(batch_size)]
-        timeouts = [False for _ in range(batch_size)]
-        glimpse_totals = [None for _ in range(batch_size)]
+        prob_as = [None for _ in range(self.batch_size)]
+        log_ds = [None for _ in range(self.batch_size)]
+        done_indices = [-1 for _ in range(self.batch_size)]
+        timeouts = [False for _ in range(self.batch_size)]
+        glimpse_totals = [None for _ in range(self.batch_size)]
         baselines = []
         locations = []
         locations_log_probs = []
@@ -272,7 +245,7 @@ class Trainer(object):
             baselines.append(baseline)
             locations.append(loc_t)
             locations_log_probs.append(log_probs_loc)
-            for batch_ind in range(batch_size):
+            for batch_ind in range(self.batch_size):
                 if done_indices[batch_ind] > -1:
                     # already done
                     continue
@@ -298,16 +271,19 @@ class Trainer(object):
 
         prob_as = torch.stack(prob_as)
         log_ds = torch.stack(log_ds)
+        baselines = torch.stack(baselines, dim=1).view(self.batch_size, glimpse_number)
+        locations_log_probs = torch.stack(locations_log_probs, dim=1)
         # calculate reward
         predicted = torch.max(prob_as, 1)[1]
-        reward = (predicted.detach() == y.long()).float()
-        reward = reward.unsqueeze(1).repeat(1, self.num_glimpses)
+        correct = (predicted.detach() == y.long()).float()
+        # only repeat for the number that actually occured (not the max)
+        reward = correct.unsqueeze(1).repeat(1, glimpse_number)
 
         # compute losses for differentiable modules
         loss_action = F.nll_loss(prob_as, y)
         decision_target = []
         decision_scaling = []
-        for batch_ind in range(batch_size):
+        for batch_ind in range(self.batch_size):
             if timeouts[batch_ind]:
                 decision_target.append(1)
                 decision_scaling.append(1.0)
@@ -322,17 +298,21 @@ class Trainer(object):
         decision_target = torch.tensor(decision_target, device=log_ds.device)
         decision_scaling = torch.tensor(decision_scaling, device=log_ds.device)
         # now take the error between our decider target and log_ds
-        loss_decision = (F.nll_loss(log_ds, decision_target,
-                                    reduction='none') * decision_scaling).mean()
+        loss_decision = (F.nll_loss(log_ds, decision_target, reduction='none') * decision_scaling).mean()
         # use REINFORCE to calculate loss based on reward
-
+        adjusted_reward = reward - baselines.detach()
+        # filtering the reward based on length of glimpse
+        glimpse_mask = torch.zeros_like(adjusted_reward)
+        for batch_ind in range(self.batch_size):
+            glimpse_mask[batch_ind, :glimpse_totals[batch_ind]] = 1
+        filtered_reward = adjusted_reward * glimpse_mask
+        loss_reinforce = torch.sum(-locations_log_probs * filtered_reward, dim=1)
+        loss_reinforce = torch.mean(loss_reinforce, dim=0)
         # sum up into a hybrid loss
-        loss = loss_action + loss_decision
+        loss = loss_action + loss_decision + loss_reinforce
         # compute accuracy
-        correct = (predicted == y).float()
         acc = 100 * (correct.sum() / len(y))
-
-        return loss, sum(glimpse_totals) / batch_size, acc
+        return loss, sum(glimpse_totals) / self.batch_size, acc
 
     def validate(self, epoch):
         """
@@ -341,7 +321,6 @@ class Trainer(object):
         losses = AverageMeter()
         accs = AverageMeter()
 
-        batch_time = AverageMeter()
         glimpses = AverageMeter()
 
         for i, (x, y) in enumerate(self.valid_loader):
@@ -386,7 +365,7 @@ class Trainer(object):
             # extract the glimpses
             for t in range(self.num_glimpses - 1):
                 # forward pass through model
-                h_t, loc_t, log_probs_loc, log_probas, d, log_probs_d = self.model(x, l_t, h_t, valid=True)
+                h_t, loc_t, log_probs_loc, log_probas, d, log_probs_d = self.model(x, l_t, h_t)
 
             # last iteration
             h_t, loc_t, log_probs_loc, log_probas, d, log_probs_d = self.model(
@@ -467,3 +446,13 @@ class Trainer(object):
                 "[*] Loaded {} checkpoint @ epoch {}".format(
                     filename, ckpt['epoch'])
             )
+
+    def reset(self):
+        dtype = (
+            torch.cuda.FloatTensor if self.use_gpu else torch.FloatTensor
+        )
+        h_t = None
+        l_t = torch.Tensor(self.batch_size, 2).uniform_(-1, 1)
+        l_t = Variable(l_t).type(dtype)
+
+        return h_t, l_t

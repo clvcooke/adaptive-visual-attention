@@ -24,20 +24,21 @@ def get_train_valid_loader(task, batch_size, random_seed, valid_size=0.2):
         datasets.MNIST('data', train=True, download=True,
                        transform=random_shift),
         batch_size=batch_size, shuffle=True)
-    all_indices = np.arange(0, len(data_loader))
+    all_indices = np.arange(0, data_loader.dataset.data.shape[0])
     np.random.seed(random_seed)
     np.random.shuffle(all_indices)
-    train_amount = int(len(all_indices) * (1 - valid_size))
+    train_amount = (int(len(all_indices) * (1 - valid_size)) // batch_size) * batch_size
+    test_amount = ((len(all_indices) - train_amount) // batch_size) * batch_size
     train_sampler = SubsetRandomSampler(all_indices[:train_amount])
-    valid_sampler = SubsetRandomSampler(all_indices[train_amount:])
+    valid_sampler = SubsetRandomSampler(all_indices[train_amount:test_amount])
     train_loader = torch.utils.data.DataLoader(
         datasets.MNIST('data', train=True, download=True,
                        transform=random_shift),
-        batch_size=batch_size, shuffle=True, sampler=train_sampler)
+        batch_size=batch_size, sampler=train_sampler)
     valid_loader = torch.utils.data.DataLoader(
         datasets.MNIST('data', train=True, download=True,
                        transform=random_shift),
-        batch_size=batch_size, shuffle=True, sampler=valid_sampler)
+        batch_size=batch_size, sampler=valid_sampler)
     classes = 10
     return train_loader, valid_loader, classes
 
