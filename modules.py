@@ -217,9 +217,10 @@ class LocationNetwork(nn.Module):
         mu = self.model(x)
         noise = torch.zeros_like(mu)
         noise.data.normal_(std=self.std)
-        log_p = Normal(loc=0, scale=self.std).log_prob(noise)
-        log_p = torch.sum(log_p, dim=1)
         loc = mu + noise
+        log_p = Normal(loc=mu, scale=self.std).log_prob(loc)
+        log_p = torch.sum(log_p, dim=1)
+        loc = torch.tanh(loc)
         return loc, log_p
 
 

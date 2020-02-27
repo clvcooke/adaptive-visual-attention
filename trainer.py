@@ -202,7 +202,7 @@ class Trainer(object):
                 self.optimizer.zero_grad()
                 loss = loss
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
+                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
 
                 self.optimizer.step()
 
@@ -300,7 +300,9 @@ class Trainer(object):
         # now take the error between our decider target and log_ds
         loss_decision = (F.nll_loss(log_ds, decision_target, reduction='none') * decision_scaling).mean()
         # use REINFORCE to calculate loss based on reward
-        adjusted_reward = reward - baselines.detach()
+        # adjusted_reward = reward - baselines.detach()
+        adjusted_reward = reward - baselines
+        loss_baseline = F.mse_loss(baselines, reward)
         # filtering the reward based on length of glimpse
         glimpse_mask = torch.zeros_like(adjusted_reward)
         for batch_ind in range(self.batch_size):
@@ -309,7 +311,7 @@ class Trainer(object):
         loss_reinforce = torch.sum(-locations_log_probs * filtered_reward, dim=1)
         loss_reinforce = torch.mean(loss_reinforce, dim=0)
         # sum up into a hybrid loss
-        loss = loss_action + loss_decision + loss_reinforce
+        loss = loss_action + loss_decision + loss_reinforce + loss_baseline
         # compute accuracy
         acc = 100 * (correct.sum() / len(y))
         return loss, sum(glimpse_totals) / self.batch_size, acc
