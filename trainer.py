@@ -200,10 +200,7 @@ class Trainer(object):
 
                 # compute gradients and update SGD
                 self.optimizer.zero_grad()
-                loss = loss
                 loss.backward()
-                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
-
                 self.optimizer.step()
 
                 # measure elapsed time
@@ -222,7 +219,7 @@ class Trainer(object):
             return losses.avg, accs.avg, glimpses.avg
 
     def rollout(self, x, y):
-        h_t, l_t = self.reset()
+        h_t, loc_t = self.reset()
         # we want to run this loop UNTIL they are all done,
         # that will involve some "dummy" forward passes
         # need to track when each element of the batch is actually
@@ -239,9 +236,10 @@ class Trainer(object):
         locations = []
         locations_log_probs = []
         glimpse_number = 0
-        while not all([done_index > -1 for done_index in done_indices]) and glimpse_number < self.num_glimpses:
+        # while not all([done_index > -1 for done_index in done_indices]) and glimpse_number < self.num_glimpses:
+        while glimpse_number < self.num_glimpses:
             # forward pass through model
-            h_t, loc_t, log_probs_loc, log_probs_a, d_t, log_probs_d, baseline = self.model(x, l_t, h_t)
+            h_t, loc_t, log_probs_loc, log_probs_a, d_t, log_probs_d, baseline = self.model(x, loc_t, h_t)
             baselines.append(baseline)
             locations.append(loc_t)
             locations_log_probs.append(log_probs_loc)
@@ -249,7 +247,7 @@ class Trainer(object):
                 if done_indices[batch_ind] > -1:
                     # already done
                     continue
-                elif d_t[batch_ind] == 1:
+                elif d_t[batch_ind] == 1 and False:
                     glimpse_totals[batch_ind] = glimpse_number + 1
                     # mark as done
                     done_indices[batch_ind] = glimpse_number
@@ -300,8 +298,8 @@ class Trainer(object):
         # now take the error between our decider target and log_ds
         loss_decision = (F.nll_loss(log_ds, decision_target, reduction='none') * decision_scaling).mean()
         # use REINFORCE to calculate loss based on reward
-        # adjusted_reward = reward - baselines.detach()
-        adjusted_reward = reward - baselines
+        adjusted_reward = reward - baselines.detach()
+        # adjusted_reward = reward - baselines
         loss_baseline = F.mse_loss(baselines, reward)
         # filtering the reward based on length of glimpse
         glimpse_mask = torch.zeros_like(adjusted_reward)
@@ -311,7 +309,8 @@ class Trainer(object):
         loss_reinforce = torch.sum(-locations_log_probs * filtered_reward, dim=1)
         loss_reinforce = torch.mean(loss_reinforce, dim=0)
         # sum up into a hybrid loss
-        loss = loss_action + loss_decision + loss_reinforce + loss_baseline
+        # loss = loss_action + loss_decision + loss_reinforce + loss_baseline
+        loss = loss_action + loss_reinforce + loss_baseline
         # compute accuracy
         acc = 100 * (correct.sum() / len(y))
         return loss, sum(glimpse_totals) / self.batch_size, acc

@@ -210,7 +210,7 @@ class LocationNetwork(nn.Module):
         super(LocationNetwork, self).__init__()
         self.normalized = normalized
         self.std = std
-        self.model = SimpleMLP(input_size, output_size, hidden_size=input_size, hidden_layers=1,
+        self.model = SimpleMLP(input_size, output_size, hidden_size=input_size, hidden_layers=0,
                                final_activation=nn.Tanh)
 
     def forward(self, x):
@@ -218,10 +218,10 @@ class LocationNetwork(nn.Module):
         noise = torch.zeros_like(mu)
         noise.data.normal_(std=self.std)
         loc = mu + noise
-        log_p = Normal(loc=mu, scale=self.std).log_prob(loc)
-        log_p = torch.sum(log_p, dim=1)
+        log_pi = Normal(mu, self.std).log_prob(loc)
+        log_pi = torch.sum(log_pi, dim=1)
         loc = torch.tanh(loc)
-        return loc, log_p
+        return loc, log_pi
 
 
 # noinspection PyTypeChecker
@@ -241,7 +241,7 @@ class DecisionNetwork(nn.Module):
 class BaselineNetwork(nn.Module):
     def __init__(self, input_size, output_size):
         super(BaselineNetwork, self).__init__()
-        self.model = SimpleMLP(input_size, output_size, hidden_layers=1, hidden_size=input_size, final_activation=nn.ReLU)
+        self.model = SimpleMLP(input_size, output_size, hidden_layers=0, hidden_size=input_size, final_activation=nn.ReLU)
 
     def forward(self, x):
         return self.model(x)
