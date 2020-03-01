@@ -236,8 +236,8 @@ class Trainer(object):
         locations = []
         locations_log_probs = []
         glimpse_number = 0
-        # while not all([done_index > -1 for done_index in done_indices]) and glimpse_number < self.num_glimpses:
-        while glimpse_number < self.num_glimpses:
+        while not all([done_index > -1 for done_index in done_indices]) and glimpse_number < self.num_glimpses:
+        # while glimpse_number < self.num_glimpses:
             # forward pass through model
             h_t, loc_t, log_probs_loc, log_probs_a, d_t, log_probs_d, baseline = self.model(x, loc_t, h_t)
             baselines.append(baseline)
@@ -247,7 +247,7 @@ class Trainer(object):
                 if done_indices[batch_ind] > -1:
                     # already done
                     continue
-                elif d_t[batch_ind] == 1 and False:
+                elif d_t[batch_ind] == 1:
                     glimpse_totals[batch_ind] = glimpse_number + 1
                     # mark as done
                     done_indices[batch_ind] = glimpse_number
@@ -309,8 +309,8 @@ class Trainer(object):
         loss_reinforce = torch.sum(-locations_log_probs * filtered_reward, dim=1)
         loss_reinforce = torch.mean(loss_reinforce, dim=0)
         # sum up into a hybrid loss
-        # loss = loss_action + loss_decision + loss_reinforce + loss_baseline
-        loss = loss_action + loss_reinforce + loss_baseline
+        loss = loss_action + loss_decision + loss_reinforce + loss_baseline
+        # loss = loss_action + loss_reinforce + loss_baseline
         # compute accuracy
         acc = 100 * (correct.sum() / len(y))
         return loss, sum(glimpse_totals) / self.batch_size, acc

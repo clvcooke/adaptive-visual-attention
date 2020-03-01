@@ -68,7 +68,7 @@ train_arg.add_argument('--init_lr', type=float, default=3e-4,
                        help='Initial learning rate value')
 train_arg.add_argument('--lr_patience', type=int, default=10,
                        help='Number of epochs to wait before reducing lr')
-train_arg.add_argument('--train_patience', type=int, default=50,
+train_arg.add_argument('--train_patience', type=int, default=500,
                        help='Number of epochs to wait before stopping train')
 train_arg.add_argument('--loss_balance', type=float, default=1.0,
                        help='loss balance')
