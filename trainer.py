@@ -127,7 +127,7 @@ class Trainer(object):
             )
 
             # train for 1 epoch
-            # train_loss, train_acc, glimpses = self.train_one_epoch(epoch)
+            train_loss, train_acc, glimpses = self.train_one_epoch(epoch)
             # evaluate on validation set
             valid_loss, valid_acc, val_glimpses = self.validate(epoch)
             # # reduce lr if validation loss plateaus
