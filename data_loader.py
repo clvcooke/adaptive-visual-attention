@@ -19,7 +19,7 @@ def get_random_shift(scale=2, image_size=28):
 def get_train_valid_loader(task, batch_size, random_seed, valid_size=0.2):
     assert ((valid_size >= 0) and (valid_size <= 1)), "[!] valid_size should be in the range [0, 1]."
     assert task.upper() == 'MNIST', "only MNIST is supported"
-    random_shift = get_random_shift()
+    random_shift = get_random_shift(scale=1)
     data_loader = torch.utils.data.DataLoader(
         datasets.MNIST('data', train=True, download=True,
                        transform=random_shift),
@@ -28,9 +28,8 @@ def get_train_valid_loader(task, batch_size, random_seed, valid_size=0.2):
     np.random.seed(random_seed)
     np.random.shuffle(all_indices)
     train_amount = (int(len(all_indices) * (1 - valid_size)) // batch_size) * batch_size
-    test_amount = ((len(all_indices) - train_amount) // batch_size) * batch_size
     train_sampler = SubsetRandomSampler(all_indices[:train_amount])
-    valid_sampler = SubsetRandomSampler(all_indices[train_amount:test_amount])
+    valid_sampler = SubsetRandomSampler(all_indices[train_amount:])
     train_loader = torch.utils.data.DataLoader(
         datasets.MNIST('data', train=True, download=True,
                        transform=random_shift),
