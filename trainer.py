@@ -68,7 +68,6 @@ class Trainer(object):
         self.momentum = config.momentum
         self.lr = config.init_lr
         self.loss_balance = config.loss_balance
-        self.batch_size = config.batch_size
 
         # misc params
         self.use_gpu = config.use_gpu
@@ -219,7 +218,8 @@ class Trainer(object):
             return losses.avg, accs.avg, glimpses.avg
 
     def rollout(self, x, y):
-        h_t, loc_t = self.reset()
+        batch_size = x.shape[0]
+        h_t, loc_t = self.reset(batch_size=batch_size)
         # we want to run this loop UNTIL they are all done,
         # that will involve some "dummy" forward passes
         # need to track when each element of the batch is actually
@@ -227,23 +227,23 @@ class Trainer(object):
 
         # use None so everything errors out if I don't explicitly set it
         # these arrays contain the last valid value for each element of a mini-batch
-        prob_as = [None for _ in range(self.batch_size)]
-        log_ds = [None for _ in range(self.batch_size)]
-        done_indices = [-1 for _ in range(self.batch_size)]
-        timeouts = [False for _ in range(self.batch_size)]
-        glimpse_totals = [None for _ in range(self.batch_size)]
+        prob_as = [None for _ in range(batch_size)]
+        log_ds = [None for _ in range(batch_size)]
+        done_indices = [-1 for _ in range(batch_size)]
+        timeouts = [False for _ in range(batch_size)]
+        glimpse_totals = [None for _ in range(batch_size)]
         baselines = []
         locations = []
         locations_log_probs = []
         glimpse_number = 0
         while not all([done_index > -1 for done_index in done_indices]) and glimpse_number < self.num_glimpses:
-        # while glimpse_number < self.num_glimpses:
+            # while glimpse_number < self.num_glimpses:
             # forward pass through model
             h_t, loc_t, log_probs_loc, log_probs_a, d_t, log_probs_d, baseline = self.model(x, loc_t, h_t)
             baselines.append(baseline)
             locations.append(loc_t)
             locations_log_probs.append(log_probs_loc)
-            for batch_ind in range(self.batch_size):
+            for batch_ind in range(batch_size):
                 if done_indices[batch_ind] > -1:
                     # already done
                     continue
@@ -269,7 +269,7 @@ class Trainer(object):
 
         prob_as = torch.stack(prob_as)
         log_ds = torch.stack(log_ds)
-        baselines = torch.stack(baselines, dim=1).view(self.batch_size, glimpse_number)
+        baselines = torch.stack(baselines, dim=1).view(batch_size, glimpse_number)
         locations_log_probs = torch.stack(locations_log_probs, dim=1)
         # calculate reward
         predicted = torch.max(prob_as, 1)[1]
@@ -281,7 +281,7 @@ class Trainer(object):
         loss_action = F.nll_loss(prob_as, y)
         decision_target = []
         decision_scaling = []
-        for batch_ind in range(self.batch_size):
+        for batch_ind in range(batch_size):
             if timeouts[batch_ind]:
                 decision_target.append(1)
                 decision_scaling.append(1.0)
@@ -303,7 +303,7 @@ class Trainer(object):
         loss_baseline = F.mse_loss(baselines, reward)
         # filtering the reward based on length of glimpse
         glimpse_mask = torch.zeros_like(adjusted_reward)
-        for batch_ind in range(self.batch_size):
+        for batch_ind in range(batch_size):
             glimpse_mask[batch_ind, :glimpse_totals[batch_ind]] = 1
         filtered_reward = adjusted_reward * glimpse_mask
         loss_reinforce = torch.sum(-locations_log_probs * filtered_reward, dim=1)
@@ -313,7 +313,7 @@ class Trainer(object):
         # loss = loss_action + loss_reinforce + loss_baseline
         # compute accuracy
         acc = 100 * (correct.sum() / len(y))
-        return loss, sum(glimpse_totals) / self.batch_size, acc
+        return loss, sum(glimpse_totals) / batch_size, acc
 
     def validate(self, epoch):
         """
@@ -359,7 +359,7 @@ class Trainer(object):
             # x = x.repeat(self.M, 1, 1, 1)
 
             # initialize location vector and hidden state
-            self.batch_size = x.shape[0]
+            minibatch_size = x.shape[0]
             h_t, l_t = self.reset()
             h_t = None
             # h_t, loc_t, log_probs_loc, log_probas, d, log_probs_d
@@ -448,12 +448,12 @@ class Trainer(object):
                     filename, ckpt['epoch'])
             )
 
-    def reset(self):
+    def reset(self, batch_size):
         dtype = (
             torch.cuda.FloatTensor if self.use_gpu else torch.FloatTensor
         )
         h_t = None
-        l_t = torch.Tensor(self.batch_size, 2).uniform_(-1, 1)
+        l_t = torch.zeros((batch_size, 2)).uniform_(-1, 1)
         l_t = Variable(l_t).type(dtype)
 
         return h_t, l_t
