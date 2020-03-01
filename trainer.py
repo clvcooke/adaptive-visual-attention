@@ -127,7 +127,7 @@ class Trainer(object):
             )
 
             # train for 1 epoch
-            train_loss, train_acc, glimpses = self.train_one_epoch(epoch)
+            # train_loss, train_acc, glimpses = self.train_one_epoch(epoch)
             # evaluate on validation set
             valid_loss, valid_acc, val_glimpses = self.validate(epoch)
             # # reduce lr if validation loss plateaus
@@ -190,8 +190,8 @@ class Trainer(object):
                 loss, glm, acc = self.rollout(x, y)
                 glimpses.update(glm)
                 # store
-                accs.update(acc.data.item())
                 try:
+                    accs.update(acc.data.item())
                     losses.update(loss.data[0], x.size()[0])
                 except:
                     losses.update(loss.data.item(), x.size()[0])
@@ -333,8 +333,10 @@ class Trainer(object):
 
             # store
             try:
-                accs.update(acc.data[0], x.size()[0])
+                accs.update(acc.data.item())
+                losses.update(loss.data[0], x.size()[0])
             except:
+                losses.update(loss.data.item(), x.size()[0])
                 accs.update(acc.data.item(), x.size()[0])
 
         return losses.avg, accs.avg, glimpses.avg
