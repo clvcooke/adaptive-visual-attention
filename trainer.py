@@ -186,7 +186,7 @@ class Trainer(object):
             for i, (x, y) in enumerate(self.train_loader):
                 if self.use_gpu:
                     x, y = x.cuda(), y.cuda()
-                # x, y = Variable(x), Variable(y)
+                x, y = Variable(x), Variable(y)
                 loss, glm, acc = self.rollout(x, y)
                 glimpses.update(glm)
                 # store
@@ -305,12 +305,14 @@ class Trainer(object):
         glimpse_mask = torch.zeros_like(adjusted_reward)
         for batch_ind in range(batch_size):
             glimpse_mask[batch_ind, :glimpse_totals[batch_ind]] = 1
-        filtered_reward = adjusted_reward * glimpse_mask
+        # filtered_reward = adjusted_reward * glimpse_mask
+        filtered_reward = adjusted_reward
         loss_reinforce = torch.sum(-locations_log_probs * filtered_reward, dim=1)
         loss_reinforce = torch.mean(loss_reinforce, dim=0)
         # sum up into a hybrid loss
         # loss = loss_action + loss_decision + loss_reinforce + loss_baseline
         loss = loss_action + loss_reinforce + loss_baseline
+
         # compute accuracy
         acc = 100 * (correct.sum() / len(y))
         return loss, sum(glimpse_totals) / batch_size, acc

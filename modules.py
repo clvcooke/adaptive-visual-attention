@@ -162,8 +162,9 @@ class GlimpseNetwork(nn.Module):
         self.patch_data_size = patch_size*patch_size*patch_amount
         self.loc_size = 2
         # TODO: pass in h_g and h_l
-        self.model_what = SimpleMLP(self.patch_data_size, hidden_size, hidden_size=hidden_size, hidden_layers=1, final_activation=None)
-        self.model_where = SimpleMLP(self.loc_size, hidden_size, hidden_size=hidden_size, hidden_layers=1, final_activation=None)
+        print("HACK")
+        self.model_what = SimpleMLP(self.patch_data_size, hidden_size, hidden_size=hidden_size//2, hidden_layers=1, final_activation=None)
+        self.model_where = SimpleMLP(self.loc_size, hidden_size, hidden_size=hidden_size//2, hidden_layers=1, final_activation=None)
 
     def forward(self, x, loc_t):
         phi = self.retina.foveate(x, loc_t)
@@ -214,7 +215,7 @@ class LocationNetwork(nn.Module):
                                final_activation=nn.Tanh)
 
     def forward(self, x):
-        mu = self.model(x)
+        mu = self.model(x.detach())
         noise = torch.zeros_like(mu)
         noise.data.normal_(std=self.std)
         loc = mu + noise
@@ -244,4 +245,4 @@ class BaselineNetwork(nn.Module):
         self.model = SimpleMLP(input_size, output_size, hidden_layers=0, hidden_size=input_size, final_activation=nn.ReLU)
 
     def forward(self, x):
-        return self.model(x)
+        return self.model(x.detach())
